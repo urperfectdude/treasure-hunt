@@ -6,7 +6,12 @@ const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY")!;
 const TEXT_MODEL = Deno.env.get("OPENAI_TEXT_MODEL") ?? "gpt-4o";
 const VISION_MODEL = Deno.env.get("OPENAI_VISION_MODEL") ?? "gpt-4o";
 
-async function openaiChat(body: Record<string, unknown>) {
+// Retries on 429/5xx — transient rate-limit or upstream hiccups are common
+// enough (observed in practice) that failing the whole clue-generation
+// request on the first blip isn't acceptable when a human is standing in a
+// hostel waiting for the game to start. Client errors (4xx other than 429)
+// are not retried since retrying won't change the outcome.
+async function openaiChat(body: Record<string, unknown>, attempt = 1): Promise<any> {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -17,6 +22,11 @@ async function openaiChat(body: Record<string, unknown>) {
   });
   if (!res.ok) {
     const text = await res.text();
+    const retryable = (res.status === 429 || res.status >= 500) && attempt < 3;
+    if (retryable) {
+      await new Promise((r) => setTimeout(r, attempt * 500));
+      return openaiChat(body, attempt + 1);
+    }
     throw new Error(`OpenAI request failed (${res.status}): ${text}`);
   }
   return res.json();
