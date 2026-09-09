@@ -15,7 +15,24 @@ import type {
 // the location-photo/voice upload).
 async function invoke<T>(name: string, body: Record<string, unknown> | FormData): Promise<T> {
   const { data, error } = await supabase.functions.invoke(name, { body });
-  if (error) throw new Error(error.message ?? `${name} failed`);
+  if (error) {
+    // On a non-2xx response, supabase-js sets error.message to a generic
+    // "Edge Function returned a non-2xx status code" and discards the
+    // response body — the actual { error: "..." } message our functions
+    // return lives on error.context (the raw Response), so recover it from
+    // there instead of surfacing the useless generic string.
+    const context = (error as { context?: Response }).context;
+    let message = error.message;
+    if (context && typeof context.json === "function") {
+      try {
+        const parsed = await context.clone().json();
+        if (parsed?.error) message = parsed.error;
+      } catch {
+        // response wasn't JSON — stick with the generic message
+      }
+    }
+    throw new Error(message ?? `${name} failed`);
+  }
   if (data?.error) throw new Error(data.error);
   return data as T;
 }
